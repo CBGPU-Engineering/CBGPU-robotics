@@ -29,3 +29,10 @@ class RemoteTests(unittest.TestCase):
   class HTTP:
    def request(self,path,method,body):calls.append((path,body));return {'server_time':time.time(),'operator_live':False,'stop_epoch':0,'command':None}
   self.agent.client=HTTP();self.agent.sync_once();self.agent.sync_once();self.assertIn('map',calls[0][1]);self.assertNotIn('map',calls[1][1]);self.assertNotIn('device_token',calls[0][1]);self.assertEqual(calls[0][0],'/robotics/agent/sync');self.assertEqual(calls[0][1]['telemetry']['mode'],'simulation')
+
+ def test_readonly_map_upload_does_not_stop_unrelated_manual_mapping(self):
+  stopped=[];self.robot.stop=lambda:stopped.append(True)
+  class HTTP:
+   epoch=0
+   def request(self,path,method,body):return {'server_time':time.time(),'operator_live':False,'stop_epoch':self.epoch,'command':None}
+  self.agent.client=HTTP();self.agent.sync_once();self.agent.sync_once();self.assertEqual(stopped,[]);self.agent.client.epoch=1;self.agent.sync_once();self.assertEqual(stopped,[True])

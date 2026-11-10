@@ -26,8 +26,9 @@ class RemoteAgent:
   require(all(callable(getattr(adapter,k,None)) for k in ['remote_snapshot','safety','validate_remote_goal','navigate_to','stop']),'Adapter needs remote_snapshot, safety, validate_remote_goal, navigate_to and stop');self.adapter=adapter;self.config=config;self.client=Client(config['device_token'],config.get('base_url',DEFAULT),timeout=2);self.allow_navigation=allow_navigation;self.ledger=ledger or Ledger();self.session=str(uuid.uuid4());self.quit=threading.Event();self.motion_stop=threading.Event();self.thread=None;self.current=None;self.ack=None;self.last_sync=0.;self.operator_live=False;self.epoch=None;self.sent_map=None;self.last_image=0.;self.guard=threading.RLock();self.failed=False
  def check(self):
   s=self.adapter.safety();require(isinstance(s,Safety) and s.armed is True and s.healthy is True and s.emergency_stop is False,'Robot is not armed/healthy or emergency stop is active');require(type(s.sensors_at) in [int,float] and math.isfinite(s.sensors_at) and -.2<=time.time()-s.sensors_at<=1,'Sensor state is stale');require(self.allow_navigation and getattr(self.adapter,'commissioned',False) is True,'Remote navigation has not been commissioned/enabled');require(self.operator_live and time.monotonic()-self.last_sync<1.5,'Remote operator/connection is stale');require(not self.motion_stop.is_set() and not self.quit.is_set(),'Navigation cancelled')
- def stop(self):
+ def stop(self,force=False):
   self.motion_stop.set()
+  if not force and self.current is None and not self.failed:return
   try:self.adapter.stop()
   except Exception:pass
  def run_goal(self,command):
@@ -68,7 +69,7 @@ class RemoteAgent:
   sent_ack=self.ack
   if sent_ack:body['ack']=sent_ack
   result=self.client.request('/robotics/agent/sync','POST',body);self.last_sync=time.monotonic();self.operator_live=result['operator_live']
-  if self.epoch is not None and self.epoch!=result['stop_epoch']:self.stop()
+  if self.epoch is not None and self.epoch!=result['stop_epoch']:self.stop(force=True)
   self.epoch=result['stop_epoch'];self.sent_map=marker
   if not self.operator_live:self.stop()
   if sent_ack and self.ack==sent_ack and sent_ack['state']!='running':self.ack=None
