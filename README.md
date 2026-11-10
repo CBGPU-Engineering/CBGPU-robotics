@@ -245,3 +245,24 @@ tests/            Synthetic transport and safety tests
 
 Original code is licensed under [Apache-2.0](./LICENSE). Hardware drivers and
 model weights retain their own licenses.
+
+## Mapless LiDAR car profile
+
+For a Raspberry Pi 5 with Ubuntu, one rotating LiDAR and two motors driven by
+existing Arduino serial commands, use [MAPLESS_CAR_PROMPT.md](./MAPLESS_CAR_PROMPT.md).
+It explicitly assumes **no encoders and no saved map**. Keep the existing serial
+protocol; identify the actual LiDAR and ROS/OS versions before selecting drivers.
+
+The local pipeline needs LiDAR scan-matching odometry, online SLAM and navigation.
+Map the visible space while moving through it; one stationary rotation does not
+map rooms hidden by walls. Map-click goals belong to the local navigation stack,
+not the cloud model's inference loop. This profile is integration guidance for the
+robot's existing project, not an included preconfigured Arduino/LiDAR driver.
+
+Relevant upstream references:
+[Nav2 sensor setup](https://docs.nav2.org/rolling/configuration_and_development/first_time_robot_setup_guide/sensors/setup_sensors/),
+[RF2O ROS2 source](https://github.com/MAPIRlab/rf2o_laser_odometry/tree/ros2),
+[Nav2 goal selection](https://docs.nav2.org/rolling/getting_started/quickstart/quickstart/).
+Check compatibility with the installed ROS distribution rather than assuming a
+specific package/version works. Real fire-scene operation needs separate physical
+validation; success in an indoor simulator does not establish that capability.
