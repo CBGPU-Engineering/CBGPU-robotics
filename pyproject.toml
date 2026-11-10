@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+[project]
+name = "cbgpu-robotics"
+version = "0.1.0"
+description = "Portable capability-based robot planning and local execution for CBGPU"
+requires-python = ">=3.10"
+license = {text = "Apache-2.0"}
+readme = "README.md"
+authors = [{name = "CBGPU Engineering"}]
+classifiers = ["Operating System :: OS Independent", "Programming Language :: Python :: 3", "Topic :: Scientific/Engineering :: Artificial Intelligence"]
+[project.scripts]
+cbgpu-robotics = "cbgpu_robotics.cli:main"
+[tool.setuptools.packages.find]
+include = ["cbgpu_robotics*"]
