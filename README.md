@@ -41,7 +41,7 @@ On Linux, macOS or Raspberry Pi:
 
 ```bash
 python3 -m venv .venv
-.venv/bin/python -m pip install https://github.com/CBGPU-Engineering/CBGPU-robotics/releases/download/v0.1.0/cbgpu_robotics-0.1.0-py3-none-any.whl
+.venv/bin/python -m pip install https://github.com/CBGPU-Engineering/CBGPU-robotics/releases/download/v0.2.0/cbgpu_robotics-0.2.0-py3-none-any.whl
 .venv/bin/cbgpu-robotics demo
 .venv/bin/cbgpu-robotics demo --execute-simulation
 ```
@@ -50,7 +50,7 @@ On Windows PowerShell:
 
 ```powershell
 py -3 -m venv .venv
-.venv\Scripts\python -m pip install https://github.com/CBGPU-Engineering/CBGPU-robotics/releases/download/v0.1.0/cbgpu_robotics-0.1.0-py3-none-any.whl
+.venv\Scripts\python -m pip install https://github.com/CBGPU-Engineering/CBGPU-robotics/releases/download/v0.2.0/cbgpu_robotics-0.2.0-py3-none-any.whl
 .venv\Scripts\cbgpu-robotics demo
 .venv\Scripts\cbgpu-robotics demo --execute-simulation
 ```
@@ -127,7 +127,7 @@ Base: `https://cbgpu.com/api/ai/v1`
 
 All calls require `Authorization: Bearer YOUR_CBGPU_AI_KEY` (or a current approved
 CBGPU browser session). Records are private to the account that created them.
-There is deliberately **no remote execution endpoint**.
+Planning endpoints do not actuate hardware. Separately paired remote navigation is described below.
 
 ### Create a plan
 
@@ -266,3 +266,87 @@ Relevant upstream references:
 Check compatibility with the installed ROS distribution rather than assuming a
 specific package/version works. Real fire-scene operation needs separate physical
 validation; success in an indoor simulator does not establish that capability.
+
+## Remote SLAM map and point navigation (0.2.0)
+
+Open [Robotics](https://app.cbgpu.com/ai?tool=robotics) on your PC or phone. Register
+a device in the remote map section. On the robot computer, run `cbgpu-robotics connect`
+and paste the one-time pairing code into the hidden prompt. The code expires in
+10 minutes and can be used once; never put it or the resulting device token in chat,
+source, shell arguments or logs. It is independent of an AI API key.
+
+First verify the entire remote channel using the harmless simulator:
+
+```bash
+cbgpu-robotics agent --device DEVICE_ID --simulator --allow-navigation
+```
+
+The web shows a **virtual** map progressively becoming known, robot pose and command
+status. Claim remote control, select an observed free cell and send the goal.
+Use cancel/stop to test interruption. The simulator has no GPIO, serial or hardware
+access, and is not evidence of physical SLAM correctness.
+
+For the real robot, start its existing LiDAR/odometry/online-SLAM/Nav2 stack, then:
+
+```bash
+# Stream maps and pose only
+cbgpu-robotics agent --device DEVICE_ID --adapter cbgpu_robotics.ros2_nav2:create
+
+# After human commissioning and local arming, permit remote navigation
+cbgpu-robotics agent --device DEVICE_ID --adapter my_robot:create --allow-navigation
+```
+
+The optional `ros2_nav2` adapter needs the matching system ROS Python packages
+(`rclpy`, Nav2/TF and message packages), not third-party pip substitutes. On Ubuntu
+use a matching Python venv with `--system-site-packages`. Its topic defaults are
+`/map`, `/scan`, `/navigate_to_pose`, base frame `base_link`, `/cbgpu/armed` and
+`/cbgpu/emergency_stop`. `CBGPU_MAP_TOPIC`, `CBGPU_SCAN_TOPIC`, `CBGPU_NAV_ACTION`,
+`CBGPU_BASE_FRAME`, `CBGPU_ARM_TOPIC`, `CBGPU_ESTOP_TOPIC`, `CBGPU_ROBOT_ID` and the
+optional JPEG `CBGPU_IMAGE_TOPIC` configure these. Local arm/e-stop status must have
+fresh periodic heartbeats. `CBGPU_ROBOT_COMMISSIONED=1` is a human commissioning
+switch, not a setup default. Keep all actual motor limits, collision avoidance,
+Arduino command watchdog and emergency-stop handling in the existing robot project.
+The adapter cancels its own Nav2 goal; a custom adapter must also invoke the project's
+serial stop path where needed.
+
+Custom adapters implement `remote_snapshot()`, `safety()`, `validate_remote_goal()`,
+`navigate_to(goal, stop_event)` and `stop()`, plus an optional `close()`. Return a
+current occupancy map and pose. `remote.pack_grid()` conservatively downsamples maps
+to at most 512×512 cells while preserving metric origin/frame/yaw; occupied/unknown
+cells are never converted to free cells. Cache packed maps between SLAM updates.
+Optional camera previews are JPEG bytes up to 256 KB, sent at most about 2 fps.
+The protocol transports real grid geometry rather than guessing coordinates from a
+screenshot. A new mapping session invalidates previous goals.
+
+The agent makes outbound HTTPS requests only. It checks local safety during motion,
+requires a live remote operator lease, stops after a lost connection and never
+replays an already reserved mission ID. Browser control leases last 10 seconds and
+renew every 3 seconds; loss of the operator can therefore take up to the lease
+window to be detected. The agent's own connection watchdog uses 1.5 seconds plus
+local processing/driver stopping time. These are software bounds, not hard real-time
+or physical braking guarantees. A web stop may be delayed by the network and cannot
+replace local emergency stop or an independent Arduino motor watchdog.
+
+The web polls maps/pose approximately once per second and displays request-to-device
+acknowledgement time when available. This is not a guarantee of 0.2-second internet
+latency. Real latency depends on network, map size and robot processing. Cloud AI
+inference is not involved in point navigation.
+
+Management API (CBGPU browser JWT only):
+
+- `GET/POST /robotics/devices`: list/register own devices.
+- `GET/DELETE /robotics/devices/{id}`: inspect/revoke own device and stored preview.
+- `POST .../{id}/pair`: revoke old token and issue a new one-time pairing code.
+- `POST .../{id}/control`: claim/renew a browser lease (`lease` UUID), or release it.
+- `POST .../{id}/goal`: request `{lease,x,y,yaw,map_session,map_version}`.
+- `POST .../{id}/stop`: cancel navigation and invalidate operator control.
+
+Agent API (paired device token in the Authorization header):
+
+- `POST /robotics/agent/enroll`: exchange `{pair_code,agent_session}` once.
+- `POST /robotics/agent/sync`: upload state/map/optional JPEG and get a pending goal,
+  operator lease state and stop epoch; acknowledge commands on subsequent syncs.
+
+See [INTEGRATION_PROMPT.md](./INTEGRATION_PROMPT.md) for the single complete prompt
+covering existing Arduino code, LiDAR-only/no-map SLAM, remote maps/images, navigation,
+stopping, simulation and real-robot commissioning.

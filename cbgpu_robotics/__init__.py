@@ -3,4 +3,4 @@ from .client import Client
 from .controller import Controller,Safety,Ledger
 from .protocol import Invalid
 __all__=['Client','Controller','Safety','Ledger','Invalid']
-__version__='0.1.0'
+__version__='0.2.0'
