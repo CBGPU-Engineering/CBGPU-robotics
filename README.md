@@ -1,352 +1,228 @@
 # CBGPU Robotics
 
-[![CI](https://github.com/CBGPU-Engineering/CBGPU-robotics/actions/workflows/ci.yml/badge.svg)](https://github.com/CBGPU-Engineering/CBGPU-robotics/actions/workflows/ci.yml)
-[![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
-[![Platforms](https://img.shields.io/badge/Platforms-Windows%20%7C%20macOS%20%7C%20Linux-555)](#platforms)
-[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-D22128)](./LICENSE)
+[![Rust](https://img.shields.io/badge/Rust-1.88%2B-000000?logo=rust)](https://www.rust-lang.org/)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-D22128?logo=apache&logoColor=white)](./LICENSE)
 
-<img src="./assets/cbgpu.png" width="96" alt="CBGPU">
+<img src="./assets/cbgpu.png" width="120" alt="CBGPU">
 
-CBGPU Robotics turns natural-language instructions into bounded plans for a robot's
-existing capabilities. School GPUs generate the plan; a **local adapter** validates
-and executes it using the robot's own drivers. The server never runs motor commands,
-connects to the robot, or receives a remote shell.
+CBGPU Robotics connects a local robot project to CBGPU's planning API and remote
+map dashboard. The native Rust client runs on Linux, macOS and Windows. A local
+adapter owns the robot's drivers, mapping, obstacle avoidance and emergency stop.
+The server supplies bounded plans and click-to-navigate goals; it never supplies
+executable code or raw motor commands.
 
-The same interface works for a mobile robot, an arm, a gripper, a camera or another
-device. Each adapter exposes the capabilities its actual hardware implements.
-This is a task planner using CBGPU's text models. It is not a pretrained universal
-vision-action model, and does not infer objects or joint trajectories from images.
+The repository contains:
 
-Try the [web workspace](https://cbgpu.com/ai?tool=robotics) or give your robot's coding
-assistant the [integration prompt](./INTEGRATION_PROMPT.md).
+- **Planning client** — HTTPS, scoped API keys, asynchronous GPU-backed planning,
+  strict capability schemas and a robot-bound, time-limited mission envelope.
+- **Local controller** — dry-run by default, explicit approval, commissioning,
+  fresh sensor checks, independent stop and persistent mission replay protection.
+- **Remote agent** — outbound-only pairing, occupancy maps, optional JPEG images,
+  telemetry, operator leases, goal acknowledgments and connection-loss stopping.
+- **Simulator** — offline planning and online map transport without hardware.
+- **Adapter interface** — a Rust trait or an explicit local executable using JSON.
+  Existing ROS, Arduino and serial code stays in the robot project.
 
-## Platforms
+## Transition status
 
-- **Windows, macOS, Linux and Raspberry Pi / ARM:** Python 3.10+ SDK and CLI;
-  no third-party runtime dependencies. CI runs Python 3.10, 3.12 and 3.14 on all
-  three desktop operating systems. Hardware-driver availability depends on the adapter.
-- **Android, iOS and desktop browsers:** the web workspace can request and inspect plans.
-  A browser does not directly control motors.
-- **Other languages and operating systems:** use the same HTTPS JSON API. The host needs
-  an HTTPS client, JSON support and a locally implemented adapter. The Python wheel is
-  portable; it does not make Python or a hardware driver available on every OS or RTOS.
-
-No GPU is required on the robot. No inbound port or public robot IP is required.
+The Rust client is a source candidate. Existing Python 0.2 clients and source are
+retained for compatibility with currently published onboarding and robot drivers.
+No robot is switched automatically. Native Linux/macOS/Windows and Raspberry Pi
+ARM64 release artifacts must be verified before onboarding changes or source
+retirement. The two clients use the same remote API and replay-ledger schema,
+but their local adapter ABIs differ. No new native binary or PyPI release is
+published by this commit.
 
 ## Getting started
 
-### Offline demonstration
-
-On Linux, macOS or Raspberry Pi:
+Build with Rust 1.88 or later and a C compiler for bundled SQLite:
 
 ```bash
-python3 -m venv .venv
-.venv/bin/python -m pip install https://github.com/CBGPU-Engineering/CBGPU-robotics/releases/download/v0.2.0/cbgpu_robotics-0.2.0-py3-none-any.whl
-.venv/bin/cbgpu-robotics demo
-.venv/bin/cbgpu-robotics demo --execute-simulation
+cargo build --locked --release
+cargo install --locked --path . --bin cbgpu-robotics
+cbgpu-robotics demo
+cbgpu-robotics demo --execute-simulation
 ```
 
-On Windows PowerShell:
+The same Cargo commands work on Windows and macOS. No Python environment is
+required. Linux ARM64 devices such as Raspberry Pi 5 can build locally using the
+same commands. This source release does not publish a new PyPI package or promise
+that an old wheel contains the native client.
 
-```powershell
-py -3 -m venv .venv
-.venv\Scripts\python -m pip install https://github.com/CBGPU-Engineering/CBGPU-robotics/releases/download/v0.2.0/cbgpu_robotics-0.2.0-py3-none-any.whl
-.venv\Scripts\cbgpu-robotics demo
-.venv\Scripts\cbgpu-robotics demo --execute-simulation
-```
+The first demo only validates and prints a plan. The second runs the virtual robot.
+Neither accesses serial ports, GPIO, ROS topics or motors.
 
-The first command validates and prints a dry-run plan. The second executes it in
-`VirtualRobot`, which has **no hardware access**. Neither needs a network connection
-or API key after installation. Activate the environment, or use the full executable
-path shown above, for the remaining commands.
+## Plan a task
 
-### Plan with a school GPU
-
-Create a private AI API key at [AI → API](https://cbgpu.com/ai?tool=api).
-Set `CBGPU_API_KEY` in your local environment or credential manager. Keep it out of
-source control, command arguments, URLs and logs.
+Set `CBGPU_API_KEY` in the local process environment using your OS secret settings.
+Keep it out of command arguments, source files, screenshots and chat. Then run:
 
 ```bash
-cbgpu-robotics plan "go to the charging station"
+cbgpu-robotics plan "Move to the charging station"
+cbgpu-robotics plan "Inspect the room" --adapter /absolute/path/to/my-robot-adapter
 ```
 
-This requests a real model plan for the virtual robot, then prints a dry-run.
-The default model is `cbgpu-coder`; `--model cbgpu-oss` selects GPT-OSS 20B.
-`--effort low|medium|high` selects effort. School reservations take priority:
-plans can queue, pause, fail or expire before an unreserved GPU becomes available.
-Capture fresh observations and make a new request after expiry.
+An adapter is a trusted local executable selected by the operator. The default is
+the simulator. A real adapter requires both `--execute --approve` and its own
+`commissioned: true` declaration before motion is possible. Local arming,
+emergency stop, health and sensor freshness are still checked during execution.
 
-### Connect your robot
+The planning API remains `https://cbgpu.com/api/ai/v1`:
 
-Implement the interface in [examples/adapter_template.py](./examples/adapter_template.py).
-The SDK loads an explicitly selected, trusted local Python factory:
+| Method | Path | Purpose |
+| --- | --- | --- |
+| POST | `/robotics/plans` | Queue a bounded plan |
+| GET | `/robotics/plans/{id}` | Poll the caller's plan |
+| DELETE | `/robotics/plans/{id}` | Cancel the caller's plan |
+
+Use `--model cbgpu-coder` or `--model cbgpu-oss`, with `--effort low`, `medium`
+or `high`. A mission is bound to the robot ID and canonical capability digest,
+requires local approval, expires within 120 seconds and contains at most six
+steps totaling 60 seconds. Each capability runs for at most 30 seconds. Unknown
+capabilities, extra parameters, unbounded schemas and expired plans are rejected.
+Schema and digest implementation is shared with the reviewed Rust server protocol.
+
+## Remote maps and click navigation
+
+1. Register a device in the CBGPU Robotics web page.
+2. Run `cbgpu-robotics connect` and paste its one-time pairing code into the hidden
+   prompt. Pairing is single-use and expires on the server.
+3. Start a read-only simulator:
 
 ```bash
-cbgpu-robotics plan "go to the charging station" --adapter my_robot:create
+cbgpu-robotics agent --device DEVICE_ID --simulator
 ```
 
-The default remains **dry-run**. Commission the adapter, verify its stop/watchdog
-and sensor handling on real hardware, and locally arm the robot before using:
+4. To test virtual navigation, explicitly add `--allow-navigation`.
+5. For a physical robot, select its commissioned local adapter:
 
 ```bash
-cbgpu-robotics plan "go to the charging station" --adapter my_robot:create --execute --approve
+cbgpu-robotics agent --device DEVICE_ID --adapter /absolute/path/to/my-robot-adapter
 ```
 
-`--approve` is an explicit local approval for this invocation, not a remote server
-permission. Review each mission and use a suitable controlled test area. The
-integration prompt helps a coding assistant inspect your existing project and
-write an adapter; it cannot discover unknown wiring or verify physical safety.
+The first physical invocation only uploads state. Enable navigation only after
+local commissioning and human verification. The web operator must hold the
+server's control lease; the local agent stops active navigation when the lease or
+connection becomes stale. Stop epochs invalidate active work. Used command IDs
+are never replayed after reconnect or process restart.
 
-## Adapter contract
+Remote endpoints and authentication remain compatible with the existing service:
 
-| Member | Purpose |
-| --- | --- |
-| `robot_id` | Stable local robot identifier |
-| `capabilities` | Named operations with closed bounded parameter schemas and deadlines |
-| `commissioned` | Remains false until the human validates the real adapter |
-| `observe()` | Real structured observations for a new planning request |
-| `safety()` | `Safety(armed, emergency_stop, sensors_at, healthy)` from local hardware |
-| `validate_step(step)` | Check current local preconditions; return exactly `True` to accept |
-| `execute(name, arguments, stop_event)` | Call a known local driver and cooperate with cancellation |
-| `stop()` | Promptly stop the hardware; must work even if a driver call is blocked |
+| Authentication | Method / path | Purpose |
+| --- | --- | --- |
+| CBGPU browser session | `GET/POST /robotics/devices` | List/register owned devices |
+| CBGPU browser session | `GET/DELETE /robotics/devices/{id}` | Inspect/revoke own device |
+| CBGPU browser session | `POST /robotics/devices/{id}/pair` | Rotate pairing credentials |
+| CBGPU browser session | `POST /robotics/devices/{id}/control` | Claim/renew/release lease |
+| CBGPU browser session | `POST /robotics/devices/{id}/goal` | Submit map-bound goal |
+| CBGPU browser session | `POST /robotics/devices/{id}/stop` | Cancel/invalidate control |
+| Single-use pairing code | `POST /robotics/agent/enroll` | Enroll local device |
+| Scoped device bearer | `POST /robotics/agent/sync` | Upload state, receive command |
 
-Use known waypoint or object IDs and finite ranges. Parameter schemas support
-`object`, `array`, `string`, `number`, `integer`, `boolean`, enum, required fields
-and explicit bounds. Objects must set `additionalProperties: false`; arrays need
-`maxItems <= 16`; strings need `maxLength <= 256`; numbers need finite minimum and
-maximum. Unknown keywords and unsupported calls are rejected.
+Only outbound HTTPS is needed. HTTP is allowed only for explicit loopback tests;
+redirects are rejected. Credentials are saved under `~/.cbgpu/robotics/devices`
+with mode 600 on Unix and are never included in telemetry. On Windows keep this
+folder in the private user profile with its normal user-only ACL.
 
-For navigation, expose a high-level operation backed by the robot's existing
-navigation and obstacle-avoidance stack. For an arm, keep joint, force and collision
-limits in its driver. Local perception must resolve object IDs before planning.
-Do not expose arbitrary code, shell commands or unbounded actuator values.
+Maps are RLE occupancy grids with at most 512×512 cells. Larger input maps are
+conservatively downsampled: occupied or unknown cells never become free. Origin,
+resolution, frame and mapping session are retained. Session changes stop an old
+goal; unknown/occupied/outside-map goals are rejected locally. Changed maps are
+uploaded once per session/version. JPEGs are limited to 256 KB and about 2 fps.
+The adapter's JSON snapshot carries JPEG bytes as base64 `image_jpeg`.
 
-## Planning API
+The local connection watchdog is 1.5 seconds plus local sensor/stop processing.
+Normal sync is approximately 250 ms; this is not a hard-real-time guarantee.
+The cloud AI is never the collision avoidance or motor watchdog loop.
 
-Base: `https://cbgpu.com/api/ai/v1`
+## Local adapters
 
-All calls require `Authorization: Bearer YOUR_CBGPU_AI_KEY` (or a current approved
-CBGPU browser session). Records are private to the account that created them.
-Planning endpoints do not actuate hardware. Separately paired remote navigation is described below.
-
-### Create a plan
-
-`POST /robotics/plans` returns HTTP 202 with `{id, state, protocol_version}`.
-
-```json
-{
-  "robot_id": "my-robot",
-  "instruction": "Go to the charging station",
-  "model": "cbgpu-coder",
-  "effort": "medium",
-  "observed_at": 0,
-  "observations": {"location": "desk"},
-  "capabilities": [{
-    "name": "navigate_to",
-    "description": "Navigate to a known waypoint using local obstacle avoidance",
-    "max_duration_s": 10,
-    "parameters": {
-      "type": "object",
-      "properties": {"waypoint": {"type": "string", "enum": ["desk", "charging_station"], "maxLength": 32}},
-      "required": ["waypoint"],
-      "additionalProperties": false
-    }
-  }]
-}
-```
-
-Replace `observed_at: 0` with the current Unix timestamp in seconds, captured with
-fresh observations. Requests older than 30 seconds or over five seconds in the
-future are rejected; synchronize the robot's clock. Instructions are limited to
-2,000 characters, capability definitions to 14 KB and observations to 12 KB.
-
-### Read or cancel
-
-- `GET /robotics/plans/{id}` returns state and progress, then a validated `mission`
-  on success, or an explicit error. Poll about once per second.
-- `DELETE /robotics/plans/{id}` cancels queued/running planning. It is not a motor
-  emergency stop, and does not stop a robot that has already begun local execution.
-
-A mission binds its ID, robot ID and capability digest to a plan, observation and
-issuance timestamps, an expiry and `requires_local_approval: true`. A plan contains:
-
-```json
-{
-  "summary": "Move to the charging station",
-  "needs_clarification": false,
-  "question": "",
-  "steps": [{"capability": "navigate_to", "arguments": {"waypoint": "charging_station"}, "duration_s": 10}]
-}
-```
-
-If more information is needed, `needs_clarification` is true, `question` explains
-what is missing and `steps` is empty. The SDK refuses to execute that response.
-
-## Execution and recovery
-
-The local controller independently revalidates the entire mission and every step.
-It checks robot ID, capability digest, expiry, known arguments and current local
-preconditions, and requires locally armed, healthy state with sensor timestamps
-no more than one second old. It checks safety about every 100 ms while a step runs.
-A step deadline, expired mission, stale sensor, e-stop, failed driver or keyboard
-interrupt requests cancellation and calls the adapter's `stop()`.
-
-Plans have at most six steps and 60 seconds total, with no individual deadline
-over 30 seconds. They expire no later than 120 seconds after their observations.
-The persistent SQLite ledger prevents replay and concurrent missions for the same
-robot across controller instances/processes sharing that ledger. It reserves the
-mission before the first actuator call.
-
-A Python thread cannot forcibly stop a noncooperative driver or guarantee physical
-stopping. The adapter needs an independent local motor watchdog and emergency stop.
-If a worker stays alive after cancellation, its robot lock remains held. A process
-crash also leaves its lock held. After physically stopping the robot and terminating
-old control processes, recover explicitly:
-
-```bash
-cbgpu-robotics unlock my-robot --confirm-stopped
-```
-
-Used mission IDs remain blocked. Do not automatically clear locks or auto-arm on boot.
-Separate local ledger files cannot coordinate one shared physical robot; use one
-controller/ledger and enforce exclusive ownership in the driver.
-
-The SDK stores the ledger in `~/.cbgpu/robotics/missions.sqlite`. On Unix it sets
-owner-only file permissions. Windows users should keep the containing user profile
-private and use OS credential storage or environment variables for API keys.
-
-## Development
-
-```bash
-python -m pip install -e .
-python -m unittest discover -s tests -v
-python -m cbgpu_robotics.cli demo --execute-simulation
-```
-
-Tests use virtual hardware and loopback HTTP. They cover default dry-run, explicit
-approval, replay, wrong-robot/schema binding, bounds, stale sensors, e-stop,
-timeouts, noncooperative driver locks and authenticated asynchronous transport.
-Real robot operation requires separate hardware commissioning; CI cannot verify it.
-
-## Project structure
+Rust projects implement `controller::Adapter`. Other robot projects provide an
+absolute executable selected with `--adapter`. The SDK invokes it as:
 
 ```text
-cbgpu_robotics/
-  client.py       HTTPS planning client and async polling
-  protocol.py     Shared schema/mission validation (also vendored by the backend)
-  controller.py   Local safety checks, deadlines, stopping and persistent ledger
-  simulator.py    Offline virtual navigation/gripper/speech adapter
-  cli.py          Cross-platform commands
-examples/         Adapter starting point, initially uncommissioned
-INTEGRATION_PROMPT.md   Copyable instructions for the robot's coding assistant
-tests/            Synthetic transport and safety tests
-.github/workflows/     Windows/macOS/Linux checks and portable wheel build
+/absolute/path/adapter --cbgpu-method METHOD
 ```
 
-Original code is licensed under [Apache-2.0](./LICENSE). Hardware drivers and
-model weights retain their own licenses.
+Each invocation receives one JSON request on stdin and returns:
 
-## Mapless LiDAR car profile
+```json
+{"ok":true,"result":{}}
+```
 
-For a Raspberry Pi 5 with Ubuntu, one rotating LiDAR and two motors driven by
-existing Arduino serial commands, use [MAPLESS_CAR_PROMPT.md](./MAPLESS_CAR_PROMPT.md).
-It explicitly assumes **no encoders and no saved map**. Keep the existing serial
-protocol; identify the actual LiDAR and ROS/OS versions before selecting drivers.
+| Method | Input | Result |
+| --- | --- | --- |
+| `describe` | `{}` | `{robot_id, capabilities, commissioned}` |
+| `observe` | `{}` | Current bounded planning observations |
+| `safety` | `{}` | `{armed, emergency_stop, sensors_at, healthy}` |
+| `validate_step` | `{capability, arguments, duration_s}` | Boolean precondition check |
+| `execute` | `{capability, arguments}` | `true` when local operation completed |
+| `stop` | `{}` | `true` only when stop was acknowledged locally |
+| `remote_snapshot` | `{}` | `{map, pose, ready, mode, message, image_jpeg?, image_at?}` |
+| `validate_remote_goal` | Goal object | Boolean local navigation check |
+| `navigate_to` | Goal object | `true` only after reaching the goal |
 
-The local pipeline needs LiDAR scan-matching odometry, online SLAM and navigation.
-Map the visible space while moving through it; one stationary rotation does not
-map rooms hidden by walls. Map-click goals belong to the local navigation stack,
-not the cloud model's inference loop. This profile is integration guidance for the
-robot's existing project, not an included preconfigured Arduino/LiDAR driver.
+The goal contains `x`, `y`, `yaw`, `frame`, `map_session` and `map_version`.
+`map` uses `width`, `height`, `resolution`, `origin:{x,y,yaw}`, `frame`, `session`,
+`version` and interleaved occupancy/count `rle` values.
 
-Relevant upstream references:
-[Nav2 sensor setup](https://docs.nav2.org/rolling/configuration_and_development/first_time_robot_setup_guide/sensors/setup_sensors/),
-[RF2O ROS2 source](https://github.com/MAPIRlab/rf2o_laser_odometry/tree/ros2),
-[Nav2 goal selection](https://docs.nav2.org/rolling/getting_started/quickstart/quickstart/).
-Check compatibility with the installed ROS distribution rather than assuming a
-specific package/version works. Real fire-scene operation needs separate physical
-validation; success in an indoor simulator does not establish that capability.
+The executable is a small client for an existing locally supervised driver. It
+must preserve that driver's state across invocations, and `stop` must work while
+`execute`/`navigate_to` is blocked. It must not invent fresh timestamps for stale
+sensor data. API credentials and parent environment are **not inherited**; load
+only the robot's explicit local configuration. Never require shell expansion.
+Responses are bounded; calls have deadlines. A child is killed on cancellation,
+and independent `stop` is invoked. Killing a client process does not guarantee
+physical stopping: the driver must have its own local watchdog and emergency stop.
 
-## Remote SLAM map and point navigation (0.2.0)
+[`examples/adapter.rs`](./examples/adapter.rs) is a native, uncommissioned example
+with no hardware access. It intentionally refuses execution/navigation. Build it
+with `cargo build --bin cbgpu-robotics-adapter-example`.
 
-Open [Robotics](https://app.cbgpu.com/ai?tool=robotics) on your PC or phone. Register
-a device in the remote map section. On the robot computer, run `cbgpu-robotics connect`
-and paste the one-time pairing code into the hidden prompt. The code expires in
-10 minutes and can be used once; never put it or the resulting device token in chat,
-source, shell arguments or logs. It is independent of an AI API key.
+### Existing ROS2 integrations
 
-First verify the entire remote channel using the harmless simulator:
+The former Python `module:factory` plugin ABI is not loaded by the native client.
+Existing installations are unchanged; do not remove their working environment
+before validating a native adapter against simulation. The previous bundled
+`rclpy` helper is not silently replaced with guessed serial/motor code.
+
+A ROS2 robot project supplies its existing LaserScan, scan-matching odometry,
+base/laser transforms, online SLAM and Nav2 navigation through the adapter ABI.
+Use the ROS distribution's supported Rust/C++ bindings or its existing local
+supervisor. Match actual topics, QoS, frames and action names. No ROS distribution,
+LiDAR model, motor pin, encoder or serial protocol is assumed by this SDK.
+See [the integration prompt](./INTEGRATION_PROMPT.md) and
+[the mapless car prompt](./MAPLESS_CAR_PROMPT.md).
+
+## Crash recovery
+
+The local SQLite ledger keeps the existing `missions` and `robot_locks` schema,
+IDs and state. This is device-local replay protection, not the hosted PostgreSQL
+database. Existing ledgers open without resetting old missions or locks.
+
+If a driver fails to stop, its robot lock is retained. Verify the physical robot is
+stopped before explicitly recovering:
 
 ```bash
-cbgpu-robotics agent --device DEVICE_ID --simulator --allow-navigation
+cbgpu-robotics unlock ROBOT_ID --confirm-stopped
 ```
 
-The web shows a **virtual** map progressively becoming known, robot pose and command
-status. Claim remote control, select an observed free cell and send the goal.
-Use cancel/stop to test interruption. The simulator has no GPIO, serial or hardware
-access, and is not evidence of physical SLAM correctness.
+This removes only the lock; previous mission IDs remain blocked.
 
-For the real robot, start its existing LiDAR/odometry/online-SLAM/Nav2 stack, then:
+## Development and verification
 
 ```bash
-# Stream maps and pose only
-cbgpu-robotics agent --device DEVICE_ID --adapter cbgpu_robotics.ros2_nav2:create
-
-# After human commissioning and local arming, permit remote navigation
-cbgpu-robotics agent --device DEVICE_ID --adapter my_robot:create --allow-navigation
+cargo fmt --all -- --check
+cargo test --locked
+cargo clippy --locked --all-targets -- -D warnings
 ```
 
-The optional `ros2_nav2` adapter needs the matching system ROS Python packages
-(`rclpy`, Nav2/TF and message packages), not third-party pip substitutes. On Ubuntu
-use a matching Python venv with `--system-site-packages`. Its topic defaults are
-`/map`, `/scan`, `/navigate_to_pose`, base frame `base_link`, `/cbgpu/armed` and
-`/cbgpu/emergency_stop`. `CBGPU_MAP_TOPIC`, `CBGPU_SCAN_TOPIC`, `CBGPU_NAV_ACTION`,
-`CBGPU_BASE_FRAME`, `CBGPU_ARM_TOPIC`, `CBGPU_ESTOP_TOPIC`, `CBGPU_ROBOT_ID` and the
-optional JPEG `CBGPU_IMAGE_TOPIC` configure these. Local arm/e-stop status must have
-fresh periodic heartbeats. `CBGPU_ROBOT_COMMISSIONED=1` is a human commissioning
-switch, not a setup default. Keep all actual motor limits, collision avoidance,
-Arduino command watchdog and emergency-stop handling in the existing robot project.
-The adapter cancels its own Nav2 goal; a custom adapter must also invoke the project's
-serial stop path where needed.
+Tests use temporary ledgers, local mock HTTP servers and virtual motors only.
+They cover planning transport, credentials, map rotation/downsampling, replay,
+arming/estop/freshness, blocked drivers, connection loss, remote acknowledgments
+and independent stops. CI runs on Linux, Windows and macOS; cross-platform CI
+results must be checked before distributing binaries for those systems.
 
-Custom adapters implement `remote_snapshot()`, `safety()`, `validate_remote_goal()`,
-`navigate_to(goal, stop_event)` and `stop()`, plus an optional `close()`. Return a
-current occupancy map and pose. `remote.pack_grid()` conservatively downsamples maps
-to at most 512×512 cells while preserving metric origin/frame/yaw; occupied/unknown
-cells are never converted to free cells. Cache packed maps between SLAM updates.
-Optional camera previews are JPEG bytes up to 256 KB, sent at most about 2 fps.
-The protocol transports real grid geometry rather than guessing coordinates from a
-screenshot. A new mapping session invalidates previous goals.
+## License
 
-The agent makes outbound HTTPS requests only. It checks local safety during motion,
-requires a live remote operator lease, stops after a lost connection and never
-replays an already reserved mission ID. Browser control leases last 10 seconds and
-renew every 3 seconds; loss of the operator can therefore take up to the lease
-window to be detected. The agent's own connection watchdog uses 1.5 seconds plus
-local processing/driver stopping time. These are software bounds, not hard real-time
-or physical braking guarantees. A web stop may be delayed by the network and cannot
-replace local emergency stop or an independent Arduino motor watchdog.
-
-The web polls maps/pose approximately once per second and displays request-to-device
-acknowledgement time when available. This is not a guarantee of 0.2-second internet
-latency. Real latency depends on network, map size and robot processing. Cloud AI
-inference is not involved in point navigation.
-
-Management API (CBGPU browser JWT only):
-
-- `GET/POST /robotics/devices`: list/register own devices.
-- `GET/DELETE /robotics/devices/{id}`: inspect/revoke own device and stored preview.
-- `POST .../{id}/pair`: revoke old token and issue a new one-time pairing code.
-- `POST .../{id}/control`: claim/renew a browser lease (`lease` UUID), or release it.
-- `POST .../{id}/goal`: request `{lease,x,y,yaw,map_session,map_version}`.
-- `POST .../{id}/stop`: cancel navigation and invalidate operator control.
-
-Agent API (paired device token in the Authorization header):
-
-- `POST /robotics/agent/enroll`: exchange `{pair_code,agent_session}` once.
-- `POST /robotics/agent/sync`: upload state/map/optional JPEG and get a pending goal,
-  operator lease state and stop epoch; acknowledge commands on subsequent syncs.
-
-See [INTEGRATION_PROMPT.md](./INTEGRATION_PROMPT.md) for the single complete prompt
-covering existing Arduino code, LiDAR-only/no-map SLAM, remote maps/images, navigation,
-stopping, simulation and real-robot commissioning.
+Licensed under the [Apache License 2.0](./LICENSE).

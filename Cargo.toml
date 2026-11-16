@@ -1,0 +1,30 @@
+[package]
+name = "cbgpu-robotics-client"
+version = "0.3.0"
+edition = "2024"
+autoexamples = false
+rust-version = "1.88"
+license = "Apache-2.0"
+description = "Outbound-only CBGPU robotics SDK with local safety and replay protection"
+[[bin]]
+name = "cbgpu-robotics"
+path = "src/main.rs"
+[dependencies]
+anyhow = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["float_roundtrip"] }
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+uuid = { version = "1", features = ["v4"] }
+sha2 = "0.10"
+regex = "1"
+ryu = "1"
+base64 = "0.22"
+rusqlite = { version = "0.37", features = ["bundled"] }
+clap = { version = "4", features = ["derive"] }
+rpassword = "7"
+ctrlc = "3"
+[dev-dependencies]
+tempfile = "3"
+[[bin]]
+name = "cbgpu-robotics-adapter-example"
+path = "examples/adapter.rs"

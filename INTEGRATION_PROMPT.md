@@ -8,16 +8,11 @@ The first target is a Raspberry Pi 5 with Ubuntu, one rotating 2D LiDAR, and a d
 
 The end result must let the operator open CBGPU on a different PC or phone, watch the SLAM map being built in real time, see the robot pose, click a known free point, and request navigation there. The robot must not require the operator to type each navigation command on the Pi. Keep local sensing, localization, path following, collision avoidance and stopping on the Pi. A map click goes directly through the authenticated remote channel to local navigation; it must not wait for an LLM or school GPU.
 
-## Use the released SDK and inspect its real interfaces
+## Build the native SDK and inspect its real interfaces
 
-Read https://github.com/CBGPU-Engineering/CBGPU-robotics, including cbgpu_robotics/remote.py, remote_protocol.py and ros2_nav2.py. Use version 0.2.0 or a later compatible release. Prefer the project's existing virtual environment. For ROS Python packages on Ubuntu, create a venv with the matching system Python and --system-site-packages so rclpy and ROS message packages remain visible; do not install a mismatched pip substitute for ROS.
+Read https://github.com/CBGPU-Engineering/CBGPU-robotics, especially src/controller.rs, src/remote.rs, src/remote_protocol.rs and examples/adapter.rs. Build the current native Rust client with Rust 1.88+ and a C compiler: cargo build --locked --release, then cargo install --locked --path . --bin cbgpu-robotics. Run cbgpu-robotics demo --execute-simulation. These commands work on Linux, Windows and macOS; Raspberry Pi 5 can build on-device. Do not install an old Python wheel expecting the new executable.
 
-Linux / Raspberry Pi example:
-  python3 -m venv --system-site-packages .venv
-  .venv/bin/python -m pip install https://github.com/CBGPU-Engineering/CBGPU-robotics/releases/download/v0.2.0/cbgpu_robotics-0.2.0-py3-none-any.whl
-  .venv/bin/cbgpu-robotics demo --execute-simulation
-
-Windows: use py -3 -m venv .venv and .venv\Scripts\python / cbgpu-robotics. macOS: use the Linux-style venv paths. The core SDK, simulator and HTTPS protocol are portable; the optional ROS2 adapter needs an installed compatible ROS2/Nav2 environment. Other platforms can implement the same authenticated HTTPS protocol.
+Existing user-owned ROS/serial drivers can remain in their existing environment. The native SDK does not load Python module:factory plugins and does not bundle a ROS distribution. Implement its Rust Adapter trait or an explicit local executable ABI, preserving existing drivers. Do not replace working hardware code to satisfy the SDK language choice.
 
 ## Connect the remote UI first with a harmless simulator
 
@@ -39,20 +34,15 @@ Start at an arbitrary local origin with no map file. Build the occupancy map whi
 
 ## Implement the physical remote adapter
 
-Use the SDK's ROS2 adapter if the project already has the needed Nav2 interfaces, or implement a trusted project-local factory with these exact methods:
-- robot_id: stable local identifier; commissioned defaults to False.
-- safety() -> cbgpu_robotics.Safety: actual local arming, emergency stop, health and sensor capture timestamp. Never refresh timestamps for stale data.
-- remote_snapshot(): {map, pose, ready, mode, message}, optionally image_jpeg bytes and image_at. Use real sensor/TF data, not invented pose values.
-- validate_remote_goal(goal): reject unknown/occupied/unreachable or stale goals using the latest local map, pose and robot footprint.
-- navigate_to(goal, stop_event): use the existing collision-aware navigation stack, cooperate with cancellation, and return True only after actual goal success.
-- stop(): promptly cancel navigation and invoke the existing serial/motor stop path. It must work independently of the cloud and model.
-- close(): release the local adapter's resources if needed.
+Implement a trusted local executable at an absolute path. It is invoked as ADAPTER --cbgpu-method METHOD, reads one JSON request on stdin, and returns {"ok":true,"result":VALUE}. It can connect to the existing locally supervised robot driver; its state must survive separate invocations. Use the exact method/input/result table in README.md. Required methods are describe, observe, safety, validate_step, execute and stop; remote mode adds remote_snapshot, validate_remote_goal and navigate_to. Description includes a stable robot_id, bounded capabilities and commissioned:false until human commissioning.
 
-Maps use the SDK's bounded occupancy-grid format: width, height, resolution in meters, origin {x,y,yaw}, frame, a mapping session ID, increasing version and RLE occupancy cells (-1 unknown, 0 free, 1..100 occupied). Row zero is the map's bottom row. Prefer remote.pack_grid() to conservatively downsample large maps; preserve frame/origin/orientation. Cache packed maps on updates instead of repacking large grids on every telemetry poll. Change the mapping session ID whenever SLAM resets or relocalizes to a different map, so old goals are cancelled. Check the real source for current limits.
+Safety returns {armed, emergency_stop, sensors_at, healthy}, using actual sensor capture timestamps. remote_snapshot returns {map, pose, ready, mode, message}, optionally base64 image_jpeg and image_at. Never invent fresh timestamps or pose. validate_remote_goal rejects unknown, occupied, unreachable or stale goals using the latest map and robot footprint. navigate_to returns true only on actual local navigation success. stop must independently cancel navigation and invoke the existing serial/motor stop path even while another client is blocked. Parent API/device credentials and environment are deliberately not inherited; use explicit local configuration and no shell expansion. Stop and watchdog must not depend on the cloud.
+
+Maps use the SDK's bounded occupancy-grid format: width, height, resolution in meters, origin {x,y,yaw}, frame, a mapping session ID, increasing version and RLE occupancy cells (-1 unknown, 0 free, 1..100 occupied). Row zero is the map's bottom row. Prefer the native remote::pack_grid() to conservatively downsample large maps; preserve frame/origin/orientation. Cache packed maps on updates instead of repacking large grids on every telemetry poll. Change the mapping session ID whenever SLAM resets or relocalizes to a different map, so old goals are cancelled. Check the real source for current limits.
 
 Send map updates as SLAM publishes them, plus fresh robot pose and status. SLAM map transmission alone satisfies the remote image/map requirement; do not assume a camera exists. If the robot has a camera, optionally send bounded JPEG previews (max 256 KB, up to about 2 fps). Do not send raw camera buffers or full LiDAR scans to the web/API as images. The map UI uses real occupancy geometry for point selection, not pixel guesses from a screenshot.
 
-For the optional SDK ROS2 adapter, configure the actual map/scan/base frame/navigation action topic names via its CBGPU_* environment variables. It subscribes to /map, /scan, TF and the NavigateToPose action by default. It also requires local /cbgpu/armed and /cbgpu/emergency_stop Bool state heartbeats; wire these to the project's actual local control/stop state, not unconditional auto-arm publishers. Missing or stale local state must disable navigation. CBGPU_ROBOT_COMMISSIONED=1 and --allow-navigation may be enabled only after explicit human commissioning, never automatically during setup.
+For ROS2, use the actual installed distribution's supported Rust/C++ bindings or the existing local supervisor. Read the real map/scan/base frame/action configuration. Wire local arming and e-stop to real heartbeats, not unconditional auto-arm publishers. Match source timestamps and TF age; missing/stale state disables navigation. There is no automatically activated bundled rclpy plugin in the native SDK.
 
 ## Physical control and failure handling
 
@@ -67,7 +57,7 @@ This is a prototype intended first for controlled non-fire tests. Indoor mapping
 Add tests with fake LiDAR/serial/Nav2 interfaces covering mapping without a map file, coordinate/origin/yaw conversion, occupied/unknown goals, stale scans/pose, lost internet, expired operator lease, duplicate goals, map reset, unreachable paths, cancellation and Arduino stop/watchdog behavior. Run the portable SDK simulator and the local project tests. Verify remote live map updates and map-click navigation in simulation before requesting physical motion.
 
 Then provide exact commands for this repository to start its real LiDAR/odometry/online-SLAM/navigation stack and its agent. Example agent command (after the stack is ready):
-  cbgpu-robotics agent --device DEVICE_ID --adapter my_robot:create
-The initial invocation streams data only. After human commissioning/arming, use --allow-navigation. If using the SDK ROS2 adapter, select --adapter cbgpu_robotics.ros2_nav2:create.
+  cbgpu-robotics agent --device DEVICE_ID --adapter /absolute/path/to/my-robot-adapter
+The initial invocation streams data only. After human commissioning/arming, use --allow-navigation.
 
 Implement the code and launch/config files now, preserving existing unrelated functionality. Do not declare physical tests passed without actual hardware evidence. Finish with the tested commands, how to stop everything, how to view/click the map remotely, and only the remaining hardware facts/tests that could not be verified. Keep credentials out of the final report.
