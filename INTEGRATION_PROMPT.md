@@ -42,7 +42,7 @@ Maps use the SDK's bounded occupancy-grid format: width, height, resolution in m
 
 Send map updates as SLAM publishes them, plus fresh robot pose and status. SLAM map transmission alone satisfies the remote image/map requirement; do not assume a camera exists. If the robot has a camera, optionally send bounded JPEG previews (max 256 KB, up to about 2 fps). Do not send raw camera buffers or full LiDAR scans to the web/API as images. The map UI uses real occupancy geometry for point selection, not pixel guesses from a screenshot.
 
-For ROS2, use the actual installed distribution's supported Rust/C++ bindings or the existing local supervisor. Read the real map/scan/base frame/action configuration. Wire local arming and e-stop to real heartbeats, not unconditional auto-arm publishers. Match source timestamps and TF age; missing/stale state disables navigation. There is no automatically activated bundled rclpy plugin in the native SDK.
+For ROS2 Jazzy, build this SDK with --features ros2; for Humble use --no-default-features --features ros2-humble. Run agent --device DEVICE_ID --ros2 for the native DDS/Nav2 adapter after configuring the actual stack. Other distributions use a validated project-owned executable adapter. Read the real map/scan/base frame/action configuration. Wire local arming and e-stop to real heartbeats, not unconditional auto-arm publishers. Match source timestamps and TF age; missing/stale state disables navigation. The native adapter subscribes to real map/scan/TF/arm/e-stop messages and calls only its own Nav2 goal. It does not bundle ROS, SLAM, a motor bridge, or a Python plugin. A terminal action result must confirm stopping before the local lock is released.
 
 ## Physical control and failure handling
 

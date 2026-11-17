@@ -5,6 +5,7 @@ pub mod controller;
 pub mod protocol;
 pub mod remote;
 pub mod remote_protocol;
+pub mod ros2_state;
 pub mod simulator;
 pub type Result<T> = anyhow::Result<T>;
 pub fn fail(message: impl Into<String>, _status: u16) -> anyhow::Error {
@@ -39,3 +40,5 @@ pub fn private_file(path: &std::path::Path) -> Result<()> {
     }
     Ok(())
 }
+#[cfg(any(feature = "ros2-jazzy", feature = "ros2-humble"))]
+pub mod ros2;

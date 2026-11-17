@@ -28,3 +28,19 @@ tempfile = "3"
 [[bin]]
 name = "cbgpu-robotics-adapter-example"
 path = "examples/adapter.rs"
+
+[features]
+default = []
+ros2 = ["ros2-jazzy"]
+ros2-humble = ["dep:ros2-client", "ros2-client/humble", "dep:futures"]
+ros2-jazzy = ["ros2-humble", "ros2-client/jazzy"]
+
+[dependencies.ros2-client]
+version = "=0.12.1"
+default-features = false
+features = ["dds", "mio_1"]
+optional = true
+
+[dependencies.futures]
+version = "0.3"
+optional = true

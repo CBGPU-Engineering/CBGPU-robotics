@@ -25,13 +25,17 @@ The repository contains:
 
 ## Transition status
 
-The Rust client is a source candidate. Existing Python 0.2 clients and source are
-retained for compatibility with currently published onboarding and robot drivers.
-No robot is switched automatically. Native Linux/macOS/Windows and Raspberry Pi
-ARM64 release artifacts must be verified before onboarding changes or source
-retirement. The two clients use the same remote API and replay-ledger schema,
-but their local adapter ABIs differ. No new native binary or PyPI release is
-published by this commit.
+The Rust SDK is the maintained implementation. The remote API, JSON wire
+protocol and local replay ledger are preserved. No installed robot is switched
+automatically. Native OS builds are checked in CI; an unverified or queued matrix
+job is not evidence of support on that runner. No physical robot or fire-scene
+autonomy has been validated by the SDK's software tests.
+
+The previous Python 0.2 wheel remains available in its immutable release for
+existing installations. Its `module:factory` adapter ABI differs from the native
+executable ABI. Keep a working user-owned driver environment until the replacement
+is tested; upgrading the SDK is not a reason to delete Arduino/serial/MQTT code.
+Do not install the old wheel expecting Rust features. No new PyPI release is made.
 
 ## Getting started
 
@@ -179,19 +183,68 @@ physical stopping: the driver must have its own local watchdog and emergency sto
 with no hardware access. It intentionally refuses execution/navigation. Build it
 with `cargo build --bin cbgpu-robotics-adapter-example`.
 
-### Existing ROS2 integrations
+### Native ROS2 / Nav2
 
-The former Python `module:factory` plugin ABI is not loaded by the native client.
-Existing installations are unchanged; do not remove their working environment
-before validating a native adapter against simulation. The previous bundled
-`rclpy` helper is not silently replaced with guessed serial/motor code.
+The optional adapter uses native DDS and ROS messages, without a Python shim,
+`rclpy`, ROS CLI subprocess or separately exposed rosbridge service. Match the
+installed ROS/Nav2 distribution when building:
 
-A ROS2 robot project supplies its existing LaserScan, scan-matching odometry,
-base/laser transforms, online SLAM and Nav2 navigation through the adapter ABI.
-Use the ROS distribution's supported Rust/C++ bindings or its existing local
-supervisor. Match actual topics, QoS, frames and action names. No ROS distribution,
-LiDAR model, motor pin, encoder or serial protocol is assumed by this SDK.
-See [the integration prompt](./INTEGRATION_PROMPT.md) and
+| Robot stack | Build flag | NavigateToPose result |
+| --- | --- | --- |
+| ROS2 Jazzy | `--features ros2` | error code and message |
+| ROS2 Humble | `--no-default-features --features ros2-humble` | Empty result |
+| Another distro / custom driver | executable adapter | project-owned protocol |
+
+```bash
+cargo install --locked --path . --bin cbgpu-robotics --features ros2
+cbgpu-robotics agent --device DEVICE_ID --ros2
+```
+
+This first invocation streams maps only. Real navigation additionally requires
+`--allow-navigation`, `CBGPU_ROBOT_COMMISSIONED=1`, live local arming and e-stop
+heartbeats, fresh LiDAR/TF, and a ready Nav2 action server. The SDK never auto-arms
+or installs a motor driver. It rejects a set `ROS_DISTRO` that differs from the
+compiled variant. If the variable is unset, the operator must verify the variant.
+The three adapter choices (`--ros2`, `--simulator`, `--adapter`) are exclusive.
+
+| Configuration | Default |
+| --- | --- |
+| `CBGPU_ROBOT_ID` | `ros2-lidar-robot` |
+| `CBGPU_BASE_FRAME` | `base_link` |
+| `CBGPU_MAP_TOPIC` | `/map` |
+| `CBGPU_SCAN_TOPIC` | `/scan` |
+| `CBGPU_ARM_TOPIC` | `/cbgpu/armed` |
+| `CBGPU_ESTOP_TOPIC` | `/cbgpu/emergency_stop` |
+| `CBGPU_NAV_ACTION` | `/navigate_to_pose` |
+| `CBGPU_IMAGE_TOPIC` | disabled; bounded compressed JPEG when configured |
+| `ROS_DOMAIN_ID` | `0`; explicit integer 0–232 |
+
+Map QoS is reliable/transient-local; scan and image subscriptions accept sensor
+best-effort; arm/e-stop use reliable volatile heartbeats. `/tf` and `/tf_static`
+provide the map-to-base transform chain. Source timestamps use synchronized wall
+clocks; simulation-time `/clock` is not supported by this adapter. Incompatible
+clocks fail freshness checks instead of inventing fresh observations. Treat the
+local ROS/DDS network as trusted and isolate it from untrusted networks.
+
+Maps are packed off the control thread. A changed map-load timestamp or map frame
+creates a new mapping session and cancels an old goal. Keep `map_load_time` stable
+within one SLAM map; resetting it on every update will conservatively invalidate
+navigation. The adapter validates an observed free goal cell; Nav2 remains
+responsible for the actual robot footprint, collision avoidance and path validity.
+
+Only a goal submitted by this adapter can be cancelled. A cancellation response
+means *canceling*, not *stopped*: a terminal Nav2 result is required before the
+local lock can be released. Missing confirmation fails closed. The Arduino motor
+watchdog and physical e-stop must operate independently of this process and the
+network. This adapter exposes remote Nav2 navigation only; natural-language
+capability execution still requires a project-owned capability adapter.
+
+The old `--adapter cbgpu_robotics.ros2_nav2:create` syntax is not imported by Rust.
+Use `--ros2` after matching the actual distro/topic/frame configuration. Arbitrary
+old Python `module:factory` plugins require an explicit executable adapter or
+continued use of the old wheel; they cannot be translated safely automatically.
+External driver languages and serial/MQTT protocols remain the robot project's
+choice. See [the integration prompt](./INTEGRATION_PROMPT.md) and
 [the mapless car prompt](./MAPLESS_CAR_PROMPT.md).
 
 ## Crash recovery
@@ -215,13 +268,30 @@ This removes only the lock; previous mission IDs remain blocked.
 cargo fmt --all -- --check
 cargo test --locked
 cargo clippy --locked --all-targets -- -D warnings
+cargo test --locked --features ros2
+cargo test --locked --no-default-features --features ros2-humble
 ```
 
 Tests use temporary ledgers, local mock HTTP servers and virtual motors only.
 They cover planning transport, credentials, map rotation/downsampling, replay,
 arming/estop/freshness, blocked drivers, connection loss, remote acknowledgments
 and independent stops. CI runs on Linux, Windows and macOS; cross-platform CI
-results must be checked before distributing binaries for those systems.
+results must be checked before distributing binaries for those systems. The
+matrix includes Linux x64/ARM64, macOS Intel/Apple Silicon and Windows x64.
+Other architectures may build from source but are not claimed verified.
+
+The explicit local DDS fixture uses domain 232 and a random action namespace;
+it starts a fake Nav2 server, never the real `/navigate_to_pose` action:
+
+```bash
+cargo test --features ros2 --test ros2_dds -- --ignored
+cargo test --no-default-features --features ros2-humble --test ros2_dds -- --ignored
+```
+
+It verifies native map/TF/sensor reception, goal completion and own-goal confirmed
+cancellation. These are simulated endpoints, not proof of real ROS/Nav2 distro
+interoperability or physical motion. Validate the actual robot stack in a
+controlled environment before commissioning.
 
 ## License
 

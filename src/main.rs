@@ -57,6 +57,9 @@ enum Commands {
         adapter: Option<PathBuf>,
         #[arg(long)]
         simulator: bool,
+        /// Native ROS2/Nav2 adapter (build with --features ros2 or ros2-humble).
+        #[arg(long)]
+        ros2: bool,
         #[arg(long)]
         allow_navigation: bool,
     },
@@ -144,18 +147,34 @@ fn run() -> Result<()> {
             device,
             adapter: path,
             simulator,
+            ros2,
             allow_navigation,
         } => {
             require(
-                simulator != path.is_some(),
-                "Choose --simulator or --adapter absolute-path",
+                usize::from(simulator) + usize::from(path.is_some()) + usize::from(ros2) == 1,
+                "Choose exactly one: --simulator, --adapter absolute-path, or --ros2",
             )?;
             let credentials = load_credentials(&credentials_dir()?, &device)?;
             let quit = Arc::new(AtomicBool::new(false));
             let q = quit.clone();
             ctrlc::set_handler(move || q.store(true, Ordering::Release))?;
-            let mut agent =
-                RemoteAgent::new(adapter(path)?, ledger, credentials, allow_navigation, quit)?;
+            let robot: Arc<dyn Adapter> = if ros2 {
+                #[cfg(any(feature = "ros2-jazzy", feature = "ros2-humble"))]
+                {
+                    Arc::new(cbgpu_robotics_client::ros2::Ros2Adapter::open(
+                        cbgpu_robotics_client::ros2::Config::from_env()?,
+                    )?)
+                }
+                #[cfg(not(any(feature = "ros2-jazzy", feature = "ros2-humble")))]
+                {
+                    anyhow::bail!(
+                        "Native ROS2 support is not included; rebuild with --features ros2 (Jazzy) or ros2-humble"
+                    )
+                }
+            } else {
+                adapter(path)?
+            };
+            let mut agent = RemoteAgent::new(robot, ledger, credentials, allow_navigation, quit)?;
             println!(
                 "Outbound agent running; navigation {}",
                 if allow_navigation {
