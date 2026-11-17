@@ -70,8 +70,20 @@ impl Ledger {
         }
         let _file = options.open(path)?;
         crate::private_file(path)?;
+        // macOS /var (including its default temp directory) is a system alias
+        // for /private/var. SQLite NOFOLLOW rejects symlink ancestors as well
+        // as the leaf. Resolve only the existing parent, never the DB leaf:
+        // an attacker-supplied database symlink must still be rejected.
+        let parent = path
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .unwrap_or(Path::new("."));
+        let resolved = parent.canonicalize()?.join(
+            path.file_name()
+                .ok_or_else(|| anyhow::anyhow!("Ledger file name required"))?,
+        );
         let db = Connection::open_with_flags(
-            path,
+            resolved,
             rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE
                 | rusqlite::OpenFlags::SQLITE_OPEN_CREATE
                 | rusqlite::OpenFlags::SQLITE_OPEN_NOFOLLOW,

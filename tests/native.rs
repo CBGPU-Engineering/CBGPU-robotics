@@ -617,3 +617,22 @@ fn wire_digest_retains_existing_unicode_float_canonical_hash() {
         "a397c62cf2cabac3258c26038de2deab35b202bd80738acc6350f182b68339d9"
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn ledger_supports_system_parent_alias_but_rejects_leaf_symlink() {
+    use std::os::unix::fs::symlink;
+    let root = tempfile::tempdir().unwrap();
+    let real = root.path().join("real");
+    std::fs::create_dir(&real).unwrap();
+    let alias = root.path().join("alias");
+    symlink(&real, &alias).unwrap();
+    let ledger = Ledger::open(&alias.join("missions.sqlite")).unwrap();
+    ledger.reserve("alias-robot", "same-mission").unwrap();
+    drop(ledger);
+    let ledger = Ledger::open(&real.join("missions.sqlite")).unwrap();
+    assert!(ledger.reserve("alias-robot", "same-mission").is_err());
+    let leaf = real.join("symlink.sqlite");
+    symlink(real.join("missions.sqlite"), &leaf).unwrap();
+    assert!(Ledger::open(&leaf).is_err());
+}
