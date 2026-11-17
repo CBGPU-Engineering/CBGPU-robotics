@@ -286,9 +286,20 @@ fn server(
             } else {
                 serde_json::from_slice(&body).unwrap()
             };
-            let reply = serde_json::to_vec(&handler(i, header, value)).unwrap();
+            let mut value = handler(i, header, value);
+            let fixture_done = value
+                .get("_fixture_done")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            if let Some(object) = value.as_object_mut() {
+                object.remove("_fixture_done");
+            }
+            let reply = serde_json::to_vec(&value).unwrap();
             write!(s,"HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n",reply.len()).unwrap();
             s.write_all(&reply).unwrap();
+            if fixture_done {
+                break;
+            }
         }
     });
     (url, worker)
@@ -423,12 +434,12 @@ fn remote_navigation_goal_is_once_only_and_connection_loss_stops() {
         let command = json!({"id":id,"expires_at":now()+20.,"payload":{"x":2.2,"y":2.1,"yaw":0.,"frame":map["frame"],"map_session":map["session"],"map_version":map["version"]}});
         let acknowledgments = Arc::new(std::sync::Mutex::new(Vec::new()));
         let received = acknowledgments.clone();
-        let count = if lose_connection { 1 } else { 28 };
+        let count = if lose_connection { 1 } else { 150 };
         let (url, h) = server(count, move |_, _, body| {
             if !body["ack"].is_null() {
                 received.lock().unwrap().push(body["ack"].clone());
             }
-            json!({"operator_live":true,"stop_epoch":0,"command":command})
+            json!({"operator_live":true,"stop_epoch":0,"command":command,"_fixture_done":body["ack"]["state"]=="succeeded"})
         });
         let mut a = RemoteAgent::new(
             r.clone(),
@@ -449,9 +460,25 @@ fn remote_navigation_goal_is_once_only_and_connection_loss_stops() {
             assert_ne!(l.previous(&id).unwrap().as_deref(), Some("succeeded"));
             assert!(r.stopped.load(Ordering::Acquire));
         } else {
+            // Wait for the actual terminal ACK, not 28 fixed timer ticks:
+            // debug builds and macOS timer coalescing can exceed nominal 2s.
+            let deadline = std::time::Instant::now() + Duration::from_secs(15);
             for _ in 1..count {
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "Navigation completion deadline; state={:?}",
+                    l.previous(&id)
+                );
                 std::thread::sleep(Duration::from_millis(100));
                 a.sync_once().unwrap();
+                if acknowledgments
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .any(|a| a["state"] == "succeeded")
+                {
+                    break;
+                }
             }
             h.join().unwrap();
             assert_eq!(l.previous(&id).unwrap().as_deref(), Some("succeeded"));
